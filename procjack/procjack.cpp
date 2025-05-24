@@ -84,13 +84,13 @@ void startProcess()
 }*/
 
 // taken from and modified: https://learn.microsoft.com/en-us/windows/win32/toolhelp/taking-a-snapshot-and-viewing-processes
-int GetProcessId()
+DWORD GetProcessId()
 {
     HANDLE hProcessSnap;
     HANDLE hProcess;
     PROCESSENTRY32 pe32;
     DWORD dwPriorityClass;
-    const TCHAR* locateProcessName = _T("notepad.exe");
+    const TCHAR* locateProcessName = _T("notepad.exe"); /* TODO: make cmdline argument */
 
     // Take a snapshot of all processes in the system.
     hProcessSnap = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
@@ -121,7 +121,7 @@ int GetProcessId()
         _tprintf(TEXT("[+] Located the requested process"));
         _tprintf(TEXT("\n====================================================="));
         _tprintf(TEXT("\nPROCESS NAME:  %s"), pe32.szExeFile);
-        _tprintf(TEXT("\n-------------------------------------------------------"));
+        _tprintf(TEXT("\n-----------------------------------------------------"));
 
         // Retrieve the priority class.
         dwPriorityClass = 0;
@@ -138,12 +138,14 @@ int GetProcessId()
             CloseHandle(hProcess);
         }
 
-        _tprintf(TEXT("\n  Process ID        = 0x%08X"), pe32.th32ProcessID);
+        // 0x%08X
+        _tprintf(TEXT("\n  Process ID        = %d"), pe32.th32ProcessID);
         _tprintf(TEXT("\n  Thread count      = %d"), pe32.cntThreads);
         _tprintf(TEXT("\n  Parent process ID = 0x%08X"), pe32.th32ParentProcessID);
         _tprintf(TEXT("\n  Priority base     = %d"), pe32.pcPriClassBase);
         if (dwPriorityClass)
             _tprintf(TEXT("\n  Priority class    = %d"), dwPriorityClass);
+        _tprintf(TEXT("\n====================================================="));
 
     } while (Process32Next(hProcessSnap, &pe32));
 
@@ -151,16 +153,60 @@ int GetProcessId()
     return(pe32.th32ProcessID);
 }
 
+// https://learn.microsoft.com/en-us/windows/win32/toolhelp/traversing-the-heap-list
+int readHeaps(DWORD pid)
+{
+    HEAPLIST32 hl;
+
+    HANDLE hHeapSnap = CreateToolhelp32Snapshot(TH32CS_SNAPHEAPLIST, pid);
+
+    hl.dwSize = sizeof(HEAPLIST32);
+
+    if (hHeapSnap == INVALID_HANDLE_VALUE)
+    {
+        printf("CreateToolhelp32Snapshot failed (%d)\n", GetLastError());
+        return 1;
+    }
+
+    if (Heap32ListFirst(hHeapSnap, &hl))
+    {
+        do
+        {
+            HEAPENTRY32 he;
+            ZeroMemory(&he, sizeof(HEAPENTRY32));
+            he.dwSize = sizeof(HEAPENTRY32);
+
+            if (Heap32First(&he, pid, hl.th32HeapID))
+            {
+                printf("\nHeap ID: %d\n", hl.th32HeapID);
+                do
+                {
+                    //printf("Block size: %d\n", he.dwBlockSize);
+                    he.dwSize = sizeof(HEAPENTRY32);
+                    //printf("Heap addr: 0x%08X\n", he.dwAddress);
+                } while (Heap32Next(&he));
+            }
+            hl.dwSize = sizeof(HEAPLIST32);
+        } while (Heap32ListNext(hHeapSnap, &hl));
+    }
+    else printf("Cannot list first heap (%d)\n", GetLastError());
+
+    CloseHandle(hHeapSnap);
+
+    return 0;
+}
+
 void _tmain(int argc, TCHAR* argv[])
 {
-    /* TODO: cmdline argument for proc name */
-    int pid = GetProcessId();
-    cout << "Notepad.exe pid: " << pid << endl;
+    /* TODO: cmdline nargument for proc name */
+    DWORD pid = GetProcessId();
     HANDLE handle = OpenProcess(
         PROCESS_QUERY_INFORMATION | PROCESS_VM_READ,
         FALSE,
         pid
     );
+
+    readHeaps(pid);
 
     if (!handle)
     {
@@ -172,7 +218,6 @@ void _tmain(int argc, TCHAR* argv[])
     /* TODO: check if permissions are enabled for memory reading */
 
     // VMMap -> notepad.exe -> Heap -> Address
-    // LPCVOID targetAddress = (LPCVOID)0x25658530000;
     LPCVOID targetAddress = (LPCVOID)0x0000025665a328bc;
     SIZE_T bytesRead;
     char buffer[32];
