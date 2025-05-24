@@ -67,6 +67,7 @@ void startProcess()
 // taken from and modified: https://learn.microsoft.com/en-us/windows/win32/toolhelp/taking-a-snapshot-and-viewing-processes
 DWORD GetProcessId()
 {
+    BOOL found = false;
     HANDLE hProcessSnap;
     HANDLE hProcess;
     PROCESSENTRY32 pe32;
@@ -127,10 +128,13 @@ DWORD GetProcessId()
         if (dwPriorityClass)
             _tprintf(TEXT("\n  Priority class    = %d"), dwPriorityClass);
         _tprintf(TEXT("\n====================================================="));
+        found = true;
 
     } while (Process32Next(hProcessSnap, &pe32));
 
     CloseHandle(hProcessSnap);
+
+    if (!found) return(FALSE);
     return(pe32.th32ProcessID);
 }
 
@@ -159,12 +163,29 @@ int readHeaps(DWORD pid)
 
             if (Heap32First(&he, pid, hl.th32HeapID))
             {
+                /* TODO: why is this sometimes negative? */
                 printf("\nHeap ID: %d\n", hl.th32HeapID);
                 do
                 {
                     //printf("Block size: %d\n", he.dwBlockSize);
                     he.dwSize = sizeof(HEAPENTRY32);
+
+                    SIZE_T bytesRead;
+                    BYTE buffer[1024]; // Adjust size as needed
+
+                    BOOL result = ReadProcessMemory(hHeapSnap, (LPCVOID)he.dwAddress, buffer, sizeof(buffer), &bytesRead);
+                    if (!result) {
+                        // Handle error (e.g., ERROR_PARTIAL_COPY if access is restricted)
+                        cout << "Errored: " << result << endl;
+                    }
+
+                    cout << "[+] Read " << bytesRead << " bytes from address 0x" << he.dwAddress << ": " << endl;
+                    for (SIZE_T i = 0; i < bytesRead; ++i) {
+                        cout << hex << (u_int)buffer[i] << " ";
+                    }
+                    cout << endl;
                     //printf("Heap addr: 0x%08X\n", he.dwAddress);
+
                 } while (Heap32Next(&he));
             }
             hl.dwSize = sizeof(HEAPLIST32);
@@ -181,31 +202,43 @@ void _tmain(int argc, TCHAR* argv[])
 {
     /* TODO: cmdline nargument for proc name */
     DWORD pid = GetProcessId();
+    if (!pid)
+    {
+        cout << "[-] Could not locate the notepad.exe process" << endl;
+        return;
+    }
+
+    readHeaps(pid);
+    return;
+
     HANDLE handle = OpenProcess(
         PROCESS_QUERY_INFORMATION | PROCESS_VM_READ,
         FALSE,
         pid
     );
 
-    readHeaps(pid);
-
     if (!handle)
     {
-        cout << "Failed to open handle to notepad.exe" << endl;
+        cout << "[-]Failed to open handle to notepad.exe" << endl;
         return;
     }
     cout << "\n[+] Successfully opened handle to notepad.exe" << endl << endl;
 
-    /* TODO: check if permissions are enabled for memory reading */
+    /* TODO: check if permissions are enabled for memory reading
+        The handle must have PROCESS_VM_READ access to the process.
+    */
 
     // VMMap -> notepad.exe -> Heap -> Address
     LPCVOID targetAddress = (LPCVOID)0x0000025665a328bc;
     SIZE_T bytesRead;
-    char buffer[32];
+    char buffer[256];
 
     // ref: https://learn.microsoft.com/en-us/windows/win32/api/memoryapi/nf-memoryapi-readprocessmemory
     if (!ReadProcessMemory(handle, targetAddress, buffer, sizeof(buffer), &bytesRead))
     {
+        /* TODO: convert to FormatMessage
+            ref: https://learn.microsoft.com/en-us/windows/win32/debug/system-error-codes--0-499-
+        */
         cerr << "Failed to read memory. Error: " << GetLastError() << endl;
         return;
     }
