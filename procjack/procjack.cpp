@@ -27,9 +27,13 @@ TODO:
 #include <memoryapi.h>
 #include <stdio.h>
 #include <tchar.h>
+#include <tlhelp32.h>
+
+//  Forward declarations:
+BOOL GetProcessList();
+
 using namespace std;
 
-/* vb läheb mingi hetk kasutusse */
 void startProcess()
 {
     STARTUPINFO si;
@@ -60,13 +64,102 @@ void startProcess()
     printf("Started %s with PID\n", "notepad.exe");
 }
 
+/*int GetProcessId(char* ProcName) {
+    PROCESSENTRY32 pe32;
+    HANDLE hSnapshot = NULL;
+    pe32.dwSize = sizeof(PROCESSENTRY32);
+    hSnapshot = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
+
+    if (Process32First(hSnapshot, &pe32)) {
+        do {
+            if (strcmp((const char *)pe32.szExeFile, ProcName) == 0)
+                break;
+        } while (Process32Next(hSnapshot, &pe32));
+    }
+
+    if (hSnapshot != INVALID_HANDLE_VALUE)
+        CloseHandle(hSnapshot);
+
+    return pe32.th32ProcessID;
+}*/
+
+// taken from and modified: https://learn.microsoft.com/en-us/windows/win32/toolhelp/taking-a-snapshot-and-viewing-processes
+int GetProcessId()
+{
+    HANDLE hProcessSnap;
+    HANDLE hProcess;
+    PROCESSENTRY32 pe32;
+    DWORD dwPriorityClass;
+    const TCHAR* locateProcessName = _T("notepad.exe");
+
+    // Take a snapshot of all processes in the system.
+    hProcessSnap = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
+    if (hProcessSnap == INVALID_HANDLE_VALUE)
+    {
+        return(FALSE);
+    }
+
+    // Set the size of the structure before using it.
+    pe32.dwSize = sizeof(PROCESSENTRY32);
+
+    // Retrieve information about the first process,
+    // and exit if unsuccessful
+    if (!Process32First(hProcessSnap, &pe32))
+    {
+        CloseHandle(hProcessSnap);          // clean the snapshot object
+        return(FALSE);
+    }
+
+    // Now walk the snapshot of processes, and
+    // display information about each process in turn
+    do
+    {
+
+        if (_tcsicmp(pe32.szExeFile, locateProcessName) != 0)
+            continue;
+
+        _tprintf(TEXT("[+] Located the requested process"));
+        _tprintf(TEXT("\n====================================================="));
+        _tprintf(TEXT("\nPROCESS NAME:  %s"), pe32.szExeFile);
+        _tprintf(TEXT("\n-------------------------------------------------------"));
+
+        // Retrieve the priority class.
+        dwPriorityClass = 0;
+        hProcess = OpenProcess(PROCESS_ALL_ACCESS, FALSE, pe32.th32ProcessID);
+
+        if (hProcess == NULL)
+        {
+            DWORD error = GetLastError();
+            _tprintf(TEXT("\nWARNING: OpenProcess failed for PID %d with error %lu"), pe32.th32ProcessID, error);
+        }
+        else
+        {
+            dwPriorityClass = GetPriorityClass(hProcess);
+            CloseHandle(hProcess);
+        }
+
+        _tprintf(TEXT("\n  Process ID        = 0x%08X"), pe32.th32ProcessID);
+        _tprintf(TEXT("\n  Thread count      = %d"), pe32.cntThreads);
+        _tprintf(TEXT("\n  Parent process ID = 0x%08X"), pe32.th32ParentProcessID);
+        _tprintf(TEXT("\n  Priority base     = %d"), pe32.pcPriClassBase);
+        if (dwPriorityClass)
+            _tprintf(TEXT("\n  Priority class    = %d"), dwPriorityClass);
+
+    } while (Process32Next(hProcessSnap, &pe32));
+
+    CloseHandle(hProcessSnap);
+    return(pe32.th32ProcessID);
+}
+
 void _tmain(int argc, TCHAR* argv[])
 {
+    /* TODO: cmdline argument for proc name */
+    int pid = GetProcessId();
+    cout << "Notepad.exe pid: " << pid << endl;
     HANDLE handle = OpenProcess(
         PROCESS_QUERY_INFORMATION | PROCESS_VM_READ,
         FALSE,
-        /* TODO: resolve pid dynamically */
-        36264 // notepad.exe PID
+        pid
     );
 
     if (!handle)
@@ -74,7 +167,7 @@ void _tmain(int argc, TCHAR* argv[])
         cout << "Failed to open handle to notepad.exe" << endl;
         return;
     }
-    cout << "[+] Successfully opened handle to notepad.exe" << endl << endl;
+    cout << "\n[+] Successfully opened handle to notepad.exe" << endl << endl;
 
     /* TODO: check if permissions are enabled for memory reading */
 
@@ -129,11 +222,3 @@ void _tmain(int argc, TCHAR* argv[])
     CloseHandle(handle);
     // CloseHandle(pi.hThread);
 }
-
-// Tips for Getting Started: 
-//   1. Use the Solution Explorer window to add/manage files
-//   2. Use the Team Explorer window to connect to source control
-//   3. Use the Output window to see build output and other messages
-//   4. Use the Error List window to view errors
-//   5. Go to Project > Add New Item to create new code files, or Project > Add Existing Item to add existing code files to the project
-//   6. In the future, to open this project again, go to File > Open > Project and select the .sln file
