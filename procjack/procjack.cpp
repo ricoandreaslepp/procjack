@@ -10,11 +10,11 @@
 #include <tchar.h>
 #include <tlhelp32.h>
 
-//  Forward declarations:
-BOOL GetProcessList();
-
 using namespace std;
 
+/* TODO: currently not used, but could be... 
+    ref: https://learn.microsoft.com/en-us/windows/win32/procthread/creating-processes
+*/
 void startProcess()
 {
     STARTUPINFO si;
@@ -41,11 +41,19 @@ void startProcess()
         return;
     }
 
-    /* TODO: print PID for debug purposes*/
     printf("Started %s with PID\n", "notepad.exe");
+
+    // Wait until child process exits.
+    WaitForSingleObject(pi.hProcess, INFINITE);
+
+    // Close process and thread handles. 
+    CloseHandle(pi.hProcess);
+    CloseHandle(pi.hThread);
 }
 
-/*int GetProcessId(char* ProcName) {
+/* TODO: this looks much more efficient
+
+int GetProcessId(char* ProcName) {
     PROCESSENTRY32 pe32;
     HANDLE hSnapshot = NULL;
     pe32.dwSize = sizeof(PROCESSENTRY32);
@@ -123,7 +131,7 @@ DWORD GetProcessId()
         // 0x%08X
         _tprintf(TEXT("\n  Process ID        = %d"), pe32.th32ProcessID);
         _tprintf(TEXT("\n  Thread count      = %d"), pe32.cntThreads);
-        _tprintf(TEXT("\n  Parent process ID = 0x%08X"), pe32.th32ParentProcessID);
+        _tprintf(TEXT("\n  Parent process ID = %d"), pe32.th32ParentProcessID);
         _tprintf(TEXT("\n  Priority base     = %d"), pe32.pcPriClassBase);
         if (dwPriorityClass)
             _tprintf(TEXT("\n  Priority class    = %d"), dwPriorityClass);
@@ -138,13 +146,64 @@ DWORD GetProcessId()
     return(pe32.th32ProcessID);
 }
 
+void ReadMemory(HANDLE hProcess, LPCVOID targetAddress, SIZE_T size) {
+    MEMORY_BASIC_INFORMATION mbi;
+    SIZE_T queryResult = VirtualQueryEx(hProcess, targetAddress, &mbi, sizeof(mbi));
+    if (queryResult == 0) {
+        cerr << "VirtualQueryEx failed. Error: " << GetLastError() << "\n";
+        return;
+    }
+
+    if (!(mbi.Protect & (PAGE_READONLY | PAGE_READWRITE | PAGE_EXECUTE_READ | PAGE_EXECUTE_READWRITE))) {
+        cerr << "Memory is not readable. Protection: " << mbi.Protect << "\n";
+        return;
+    }
+
+    /*
+    cout << "[+] Read " << bytesRead << " bytes from address 0x" << targetAddress << ": " << endl;
+    for (SIZE_T i = 0; i < bytesRead; ++i) {
+        cout << hex << (u_int)buffer[i] << " ";
+    }
+    cout << endl;
+
+    cout << "[!] Unsaved text in ASCII:" << endl;
+    for (SIZE_T i = 0; i < bytesRead; ++i) {
+        if (buffer[i] != '0')
+        {
+            cout << buffer[i];
+        }
+    }
+    cout << endl;*/
+
+    BYTE buffer[4096];
+    SIZE_T bytesRead;
+
+    // ref: https://learn.microsoft.com/en-us/windows/win32/api/memoryapi/nf-memoryapi-readprocessmemory
+    if (ReadProcessMemory(hProcess, targetAddress, buffer, sizeof(buffer), &bytesRead)) {
+        cout << "Read " << bytesRead << " bytes from address: " << targetAddress << "\n";
+        cout << "  Data: ";
+        for (SIZE_T i = 0; i < bytesRead; ++i) {
+            //if (buffer[i] != 0x6c || buffer[i] != 0x73) continue;
+            if (buffer[i] < 32 || buffer[i] > 126) continue;
+            cout << (char)buffer[i];
+
+        }
+        cout << "\n";
+    } else {
+        /* TODO: convert to FormatMessage
+            ref: https://learn.microsoft.com/en-us/windows/win32/debug/system-error-codes--0-499-
+        */
+        cerr << "Failed to read memory. Error: " << GetLastError() << endl;
+    }
+}
+
+/*
 // https://learn.microsoft.com/en-us/windows/win32/toolhelp/traversing-the-heap-list
+// this only works for our current process :/, related: https://stackoverflow.com/questions/18901550/how-can-i-get-heap-info-from-another-process-in-c
 int readHeaps(DWORD pid)
 {
     HEAPLIST32 hl;
-
-    HANDLE hHeapSnap = CreateToolhelp32Snapshot(TH32CS_SNAPHEAPLIST, pid);
-
+    HANDLE hHeapSnap = CreateToolhelp32Snapshot(TH32CS_SNAPHEAPLIST, GetCurrentProcessId());
     hl.dwSize = sizeof(HEAPLIST32);
 
     if (hHeapSnap == INVALID_HANDLE_VALUE)
@@ -161,31 +220,14 @@ int readHeaps(DWORD pid)
             ZeroMemory(&he, sizeof(HEAPENTRY32));
             he.dwSize = sizeof(HEAPENTRY32);
 
-            if (Heap32First(&he, pid, hl.th32HeapID))
+            if (Heap32First(&he, GetCurrentProcessId(), hl.th32HeapID))
             {
-                /* TODO: why is this sometimes negative? */
-                printf("\nHeap ID: %d\n", hl.th32HeapID);
+                cout << "\nHeap ID: " << hl.th32HeapID << endl;
                 do
                 {
                     //printf("Block size: %d\n", he.dwBlockSize);
+
                     he.dwSize = sizeof(HEAPENTRY32);
-
-                    SIZE_T bytesRead;
-                    BYTE buffer[1024]; // Adjust size as needed
-
-                    BOOL result = ReadProcessMemory(hHeapSnap, (LPCVOID)he.dwAddress, buffer, sizeof(buffer), &bytesRead);
-                    if (!result) {
-                        // Handle error (e.g., ERROR_PARTIAL_COPY if access is restricted)
-                        cout << "Errored: " << result << endl;
-                    }
-
-                    cout << "[+] Read " << bytesRead << " bytes from address 0x" << he.dwAddress << ": " << endl;
-                    for (SIZE_T i = 0; i < bytesRead; ++i) {
-                        cout << hex << (u_int)buffer[i] << " ";
-                    }
-                    cout << endl;
-                    //printf("Heap addr: 0x%08X\n", he.dwAddress);
-
                 } while (Heap32Next(&he));
             }
             hl.dwSize = sizeof(HEAPLIST32);
@@ -194,8 +236,35 @@ int readHeaps(DWORD pid)
     else printf("Cannot list first heap (%d)\n", GetLastError());
 
     CloseHandle(hHeapSnap);
+}*/
 
-    return 0;
+void EnumerateMemoryRegions(HANDLE hProcess) {
+    SYSTEM_INFO sysInfo;
+    GetSystemInfo(&sysInfo);
+    LPCVOID address = sysInfo.lpMinimumApplicationAddress;
+
+    MEMORY_BASIC_INFORMATION mbi;
+    while (address < sysInfo.lpMaximumApplicationAddress) {
+        if (VirtualQueryEx(hProcess, address, &mbi, sizeof(mbi))) {
+            cout << "Base Address: " << mbi.BaseAddress
+                << ", Region Size: " << mbi.RegionSize
+                << ", State: " << mbi.State
+                << ", Protect: " << mbi.Protect << "\n";
+
+            if (mbi.Protect & (PAGE_READONLY | PAGE_READWRITE | PAGE_EXECUTE_READ | PAGE_EXECUTE_READWRITE)) {
+                cout << "  Readable region found.\n";
+                ReadMemory(hProcess, address, mbi.RegionSize);
+            }
+            else if (mbi.Protect == PAGE_NOACCESS) {
+                cout << "  Skipping PAGE_NOACCESS region.\n";
+            }
+
+            address = (LPCVOID)((SIZE_T)mbi.BaseAddress + mbi.RegionSize);
+        } else {
+            cerr << "VirtualQueryEx failed at address: " << address << ". Error: " << GetLastError() << "\n";
+            break;
+        }
+    }
 }
 
 void _tmain(int argc, TCHAR* argv[])
@@ -204,13 +273,11 @@ void _tmain(int argc, TCHAR* argv[])
     DWORD pid = GetProcessId();
     if (!pid)
     {
-        cout << "[-] Could not locate the notepad.exe process" << endl;
+        cerr << "[-] Could not locate the notepad.exe process" << endl;
         return;
     }
 
-    readHeaps(pid);
-    return;
-
+    /* The handle must have PROCESS_VM_READ access to the process */
     HANDLE handle = OpenProcess(
         PROCESS_QUERY_INFORMATION | PROCESS_VM_READ,
         FALSE,
@@ -219,65 +286,17 @@ void _tmain(int argc, TCHAR* argv[])
 
     if (!handle)
     {
-        cout << "[-]Failed to open handle to notepad.exe" << endl;
+        cerr << "[-] Failed to open handle to notepad.exe" << endl;
         return;
     }
     cout << "\n[+] Successfully opened handle to notepad.exe" << endl << endl;
 
-    /* TODO: check if permissions are enabled for memory reading
-        The handle must have PROCESS_VM_READ access to the process.
-    */
+    EnumerateMemoryRegions(handle);
+
+    LPCVOID targetAddr = (LPCVOID)0x01c6d23c;
+    ReadMemory(handle, targetAddr, 1024);
 
     // VMMap -> notepad.exe -> Heap -> Address
-    LPCVOID targetAddress = (LPCVOID)0x0000025665a328bc;
-    SIZE_T bytesRead;
-    char buffer[256];
-
-    // ref: https://learn.microsoft.com/en-us/windows/win32/api/memoryapi/nf-memoryapi-readprocessmemory
-    if (!ReadProcessMemory(handle, targetAddress, buffer, sizeof(buffer), &bytesRead))
-    {
-        /* TODO: convert to FormatMessage
-            ref: https://learn.microsoft.com/en-us/windows/win32/debug/system-error-codes--0-499-
-        */
-        cerr << "Failed to read memory. Error: " << GetLastError() << endl;
-        return;
-    }
-
-    cout << "[+] Read " << bytesRead << " bytes from address 0x" << targetAddress << ": " << endl;
-    for (SIZE_T i = 0; i < bytesRead; ++i) {
-        cout << hex << (u_int)buffer[i] << " ";
-    }
-    cout << endl;
-
-    cout << "[!] Unsaved text in ASCII:" << endl;
-    for (SIZE_T i = 0; i < bytesRead; ++i) {
-        if (buffer[i] != '0')
-        {
-            cout << buffer[i];
-        }
-    }
-    cout << endl;
-
-    /*
-    PROCESSINFOCLASS pic;
-    PROCESS_BASIC_INFORMATION pbi;
-    PULONG retLen;
-
-    // Zw for kernel-space, Nt for user-space, ref: https://learn.microsoft.com/en-us/windows-hardware/drivers/kernel/using-nt-and-zw-versions-of-the-native-system-services-routines
-    NtQueryInformationProcess(
-        pi.hProcess,
-        pic,
-        &pbi,
-        sizeof(pbi),
-        retLen
-    );
-    */
-
-
-    // Wait until child process exits.
-    // WaitForSingleObject(pi.hProcess, INFINITE);
-
-    // Close process and thread handles. 
     CloseHandle(handle);
-    // CloseHandle(pi.hThread);
+    return;
 }
